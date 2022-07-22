@@ -1,24 +1,29 @@
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.{Await, Future}
+import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration.Duration
-import scala.collection.JavaConverters._
-
+import scala.collection.JavaConverters.*
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentSkipListSet}
 
 object BFS {
   type CMap[K, V] = collection.concurrent.Map[K,V]
+  type Map[K, V] = collection.Map[K,V]
+  type Set[V] = collection.Set[V]
 
-  def timed[A](f: => A): (Double, A) = {
+  def avg_timed[A](f: => A): (Double, A) = {
     val start = System.nanoTime
+    (1 until 10).foreach(_ => f)
     val res = f
     val stop = System.nanoTime
-    ((stop - start)/1e9, res)
+    (((stop - start)/1e9)/10, res)
   }
   case class Node(
                    key: Char,
                    row: Int,
                    col: Int,
                  )
+    extends  Comparable[Node] {
+    override def compareTo(o: Node): Int = this.row.compareTo(o.row)
+  }
   def solveMaze(maze: Vector[String], vBfs: (Node => Set[Node], Node) => (Map[Node,Node], Map[Node, Int])): Option[String] = {
     def getNbrs(maze: Vector[String], v: Node): Set[Node] = {
       if v.key.equals('x') then Set()
@@ -83,56 +88,150 @@ object BFS {
         val distance_ = frontier.foldLeft(distance)(
         (m,x) => if distance.contains(x) then m
                   else m + (x -> d))
-
-      iterate(frontier_, parent_, distance_, d+1)
+        iterate(frontier_, parent_, distance_, d+1)
     }
 
     iterate(Set(src), Map(src -> src), Map(), 0)
   }
 
-  def bfsFut[V](nbrs: V => Set[V], src: V): (Map[V,V], Map[V, Int]) = {
+  def bfsFut[V](nbrs: V => Set[V], src: V): (CMap[V,V], CMap[V, Int]) = {
 
-    def expandFut(frontier: Set[V], parent: CMap[V, V], fixed: Map[V,V]): (Set[V], CMap[V, V]) = {
-      Future{frontier.foldLeft(parent)((m,x) =>
-          nbrs(x).foldLeft(m)((mm, adj) =>
-            if mm.contains(adj) then mm
-            else mm += (adj -> x)
-          ))}
+    def expandFut(frontier: Set[V], parent: CMap[V, V], fixed: Set[V]): (Set[V], CMap[V, V]) = {
+      val allFrontier = ConcurrentSkipListSet[V]()
 
       val nextSet = frontier.map(
-        v => Future{ nbrs(v).filter(n => !fixed.contains(n)) }
-      )
+        v => Future{
+          nbrs(v).foreach(f => {
+            if !parent.contains(f) then parent += (f -> v)
+            if !fixed.contains(f) then allFrontier.add(f)
+          })})
+
       val nextSetFut = Future.sequence(nextSet)
+      val _ = Await.result(nextSetFut, Duration.Inf)
 
-      val allFrontier = nextSetFut.map(
-        s => s.foldLeft(Set.empty: Set[V])((ss, elem) => ss ++ elem)
-      )
-
-      (Await.result(allFrontier, Duration.Inf), parent)
+      (allFrontier.asScala.toSet, parent)
     }
 
     def iterate(frontier: Set[V],
-    parent: CMap[V, V],
-    distance: CMap[V, Int], d: Int,
-                ): (CMap[V, V], CMap[V, Int]) =
+      parent: CMap[V, V],
+      distance: CMap[V, Int], d: Int): (CMap[V, V], CMap[V, Int]) =
       if frontier.isEmpty then
         (parent, distance)
       else {
 
-        val temp = Future{expandFut(frontier, parent, parent.toMap)}
-        frontier.map(x => Future{
-          if distance.contains(x) then distance
-          else distance += (x -> d)
-        })
+        Future { frontier.foreach(x =>
+        if distance.contains(x) then distance
+        else distance += (x -> d) )}
 
-        val (frontier_, parent_) = Await.result(temp, Duration.Inf)
+        val (frontier_, parent_) = expandFut(frontier, parent, parent.keySet.toSet)
         iterate(frontier_, parent_, distance, d+1)
       }
 
     val parent = new ConcurrentHashMap[V,V]().asScala
     val distance = new ConcurrentHashMap[V, Int]().asScala
     val (par, dist) = iterate(Set(src), parent += (src -> src), distance, 0)
-    (par.toMap, dist.toMap)
+    (par, dist)
+  }
+
+  def bfsThr[V](nbrs: V => Set[V], src: V): (Map[V,V], Map[V, Int]) = {
+
+    def execute[F](body: => F)(implicit ec: ExecutionContext): Future[F] = {
+      val p = Promise[F]
+
+      try {
+        ec.execute( new Runnable {
+          override def run(): Unit = p.success(body)
+        })
+      } catch {
+        case ex => p.failure(ex)
+      }
+
+      p.future
+    }
+
+    class Counter {
+      private var count = 0
+
+      def increment() = this.synchronized( this.count += 1 )
+      def get = this.synchronized( count )
+    }
+
+    def expandThr(frontier: Set[V], parent: CMap[V, V], fixed: Set[V]): (Set[V], CMap[V, V]) = {55555
+      val frontFinish = new Counter
+
+      val allFrontier = ConcurrentSkipListSet[V]()
+
+      val _ = frontier.map(
+        v => execute {
+          nbrs(v).foreach(f =>
+            if !parent.contains(f) then parent += (f -> v)
+            if !fixed.contains(f) then allFrontier.add(f))
+
+          frontFinish.increment()
+//          frontFinish.synchronized( frontFinish.notify() )
+        }
+      )
+
+      while (frontFinish.get < frontier.size) {
+//        frontFinish.synchronized( frontFinish.wait() )
+      }
+
+      (allFrontier.asScala.toSet, parent)
+    }
+
+    def iterate(frontier: Set[V],
+                parent: CMap[V, V],
+                distance: CMap[V, Int], d: Int,
+               ): (CMap[V, V], CMap[V, Int]) =
+      if frontier.isEmpty then
+        (parent, distance)
+      else {
+
+        execute { frontier.foreach(x =>
+        if distance.contains(x) then distance
+        else distance += (x -> d) )}
+
+        val (frontier_, parent_) = expandThr(frontier, parent, parent.keySet.toSet)
+        iterate(frontier_, parent_, distance, d+1)
+      }
+
+    val parent = new ConcurrentHashMap[V,V]().asScala
+    val distance = new ConcurrentHashMap[V, Int]().asScala
+    val (par, dist) = iterate(Set(src), parent += (src -> src), distance, 0)
+    (par, dist)
+  }
+
+  val defaultEncoding = "ISO8859-1"
+
+  def load(filename: String): Map[String, Set[String]] = {
+    def iterate(l: List[String], count: Int, key: String, value: Set[String], map: Map[String, Set[String]]): Map[String, Set[String]] = l match {
+      case Nil => map
+      case h::t =>
+        val split = h.split('|').map(_.trim)
+        if count == 0 then
+          iterate(t, split.tail.head.toInt, split.head, Set(), map + (key -> value))
+        else
+          iterate(t, count-1, key, value ++ split.tail.toSet, map)
+    }
+    val lines = scala.io.Source.fromFile(filename, defaultEncoding)
+      .getLines().drop(1).toList
+
+    val split = lines.head.split('|').map(_.trim)
+    iterate(lines.tail, split.tail.head.toInt, split.head, Set(), Map())
+  }
+
+  def linkage(thesaurusFile: String, f: (String => Set[String], String) => (Map[String, String], Map[String, Int])): String => String => Option[List[String]] = {
+    def walkBack(parent: Map[String, String], src: String, cur: String, ans: List[String]): List[String] = {
+      if src.equals(cur) then cur::ans
+      else
+        walkBack(parent, src, parent(cur), cur::ans)
+    }
+
+    (wordB: String) => (wordA: String) =>
+      val db = load(thesaurusFile)
+      val (parent, distance) = f((v: String) => if db.contains(v) then db(v) else Set(), wordA)
+      if !distance.contains(wordB) then None
+      else Some(walkBack(parent, wordA, wordB, Nil).reverse)
   }
 
   def main(args: Array[String]) = {
@@ -154,17 +253,61 @@ object BFS {
       "xxxxxxxxxxxxxxxxxx"
     )
 
-    val (tSeq1, rSeq1) = timed(solveMaze(maze2, bfs))
-    val (tFut1, rFut1) = timed(solveMaze(maze2, bfsFut))
+    val maze3 = Vector(
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "x    x      x          x      x          x      x    xx    x      x   ex",
+      "x    x   x  x xxxxx    x   x  x xxxxx    x   x  x xxxxx    x   x  x xxxx",
+      "x        x  x              x  x    xx        x  x    xx        x  x    x",
+      "xs   x   x       xx    x   x       xx    x   x             x   x       x",
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    )
 
-    println(f"seq: result=$rSeq1, time=$tSeq1%.6fs")
-    println(f"fut: result=$rFut1, time=$tFut1%.6fs")
+    /*
+    * For some unknown reason, running all measurement continuously is quite unstable (The tests will take longer or faster than expected).
+      For fairness, thus, the result of this project will based on measuring each test one by one.
+    */
 
-    val (tSeq, rSeq) = timed(solveMaze(maze, bfs))
-    val (tFut, rFut) = timed(solveMaze(maze, bfsFut))
+    // Test 1.1
+        val (tSeq1, rSeq1) = avg_timed(solveMaze(maze3, bfs))
+        println(f"seq: result=$rSeq1, time=$tSeq1%.6fs")
+
+    // Test 1.2
+        val (tFut1, rFut1) = avg_timed(solveMaze(maze3, bfsFut))
+        println(f"fut: result=$rFut1, time=$tFut1%.6fs")
+
+    // Test 1.3
+        val (tThr1, rThr1) = avg_timed(solveMaze(maze3, bfsThr))
+        println(f"Thr: result=$rThr1, time=$tThr1%.6fs")
+
+    // Test 2.1
+        val (t1, r1) = avg_timed(linkage("thesaurus_db.txt", bfs)("illogical")("logical"))
+        println(f"Seq: result=$r1, time=$t1%.6fs")
+
+    // Test 2.2
+        val (t2, r2) = avg_timed(linkage("thesaurus_db.txt", bfsFut)("illogical")("logical"))
+        println(f"Fut: result=$r2, time=$t2%.6fs")
+
+    // Test 2.3
+        val (t3, r3) = avg_timed(linkage("thesaurus_db.txt", bfsThr)("illogical")("logical"))
+        println(f"Thr: result=$r3, time=$t3%.6fs")
+
+    /*
+    * Below are optional tests.
+    */
+
+    //    val (tSeq, rSeq) = timed(solveMaze(maze2, bfs))
+    //    println(f"seq: result=$rSeq, time=$tSeq%.6fs")
+    //    val (tFut, rFut) = timed(solveMaze(maze2, bfsFut))
+    //    println(f"fut: result=$rFut, time=$tFut%.6fs")
+    //    val (tThr, rThr) = timed(solveMaze(maze2, bfsThr))
+    //    println(f"Thr: result=$rThr, time=$tThr%.6fs")
 
 
-    println(f"seq: result=$rSeq, time=$tSeq%.6fs")
-    println(f"fut: result=$rFut, time=$tFut%.6fs")
+    //    val (t1, r1) = avg_timed(linkage("thesaurus_db.txt", bfs)("life")("happiness"))
+    //    println(f"Seq: result=$r1, time=$t1%.6fs")
+    //    val (t2, r2) = avg_timed(linkage("thesaurus_db.txt", bfsFut)("life")("happiness"))
+    //    println(f"Fut: result=$r2, time=$t2%.6fs")
+    //    val (t3, r3) = avg_timed(linkage("thesaurus_db.txt", bfsThr)("life")("happiness"))
+    //    println(f"Thr: result=$r3, time=$t3%.6fs")
   }
 }
