@@ -16,6 +16,15 @@ For accuracy, thus, the result of this project will be based on measuring each t
 First Observation: By running tests # 1.1, 1.2, 1.3, we can observe from the result that test 1.1 performs better than another two concurrent versions. And the future and thread version both have about the same performance.
 
 ```
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      "x    x      x          x      x          x      x    xx    x      x   ex"
+      "x    x   x  x xxxxx    x   x  x xxxxx    x   x  x xxxxx    x   x  x xxxx"
+      "x        x  x              x  x    xx        x  x    xx        x  x    x"
+      "xs   x   x       xx    x   x       xx    x   x             x   x       x"
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+```
 Test 1.1 seq: result=Some(urrrrruurrrrrdddrrurrrrrrrrrrruurrrrrdddrruuurrrrrrrrrddrruurrrrrdddrrrrrrrrurrrrruurrrrrdddrruuurrr), time=0.034609s
 Test 1.2 fut: result=Some(urrrrruurrrrrdddrrurrrrrrrrrrruurrrrrdddrruuurrrrrrrrrddrruurrrrrdddrrrrrrrrurrrrruurrrrrdddrruuurrr), time=0.071792s
 Test 1.3 thr: result=Some(urrrrruurrrrrdddrrurrrrrrrrrrruurrrrrdddrruuurrrrrrrrrddrruurrrrrdddrrrrrrrrurrrrruurrrrrdddrruuurrr), time=0.073422s
