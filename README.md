@@ -17,7 +17,7 @@ First Observation: By running tests # 1.1, 1.2, 1.3, we can observe from the res
 
 Second Observation: By running test # 2.1, 2.2, 2.3, we can observe from the result that test 2.2 and 2.3 performs better than the sequential version. And the future and thread version both have about the same performance.
 
-Conclusion: According to both observations, shape of the graph really matters the performance across variations of BFS. I can conclude to the result to a few important points including
+Conclusion: According to both observations, shape of the graph really matters the performance across variations of BFS. I can conclude the result to a few important points including
 - The sequential version runs faster than the concurrent version when the graph is not wide (i.e each vertex has only few neighbors), as we can see that solving a maze problem, each vertex has only up to 6 neighbors.
 - The concurrent version runs faster than the sequential version when the graph is wide (i.e each vertex has many neighbors), as it is worth picking up a new thread to compute for all adjacent neighbors.
 - Both concurrent versions overall have about the same performance (Based on my machine).
